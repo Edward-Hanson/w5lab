@@ -352,3 +352,8 @@ Resources:
         ScaleInCooldown: 60
         ScaleOutCooldown: 60
 
+  ECRRepository:
+  Type: AWS::ECR::Repository
+  Properties:
+    RepositoryName: cloudbasedproject-repo
+
