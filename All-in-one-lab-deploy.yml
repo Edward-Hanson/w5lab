@@ -1,0 +1,3 @@
+template-file-path: 'application_resource_provision.yml '
+parameters: {}
+tags: {}
