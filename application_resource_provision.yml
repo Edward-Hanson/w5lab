@@ -168,7 +168,7 @@ Resources:
       Protocol: HTTP
       Port: 2020
       TargetType: ip
-      HealthCheckPath: /
+      HealthCheckPath: /actuator/health
 
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
