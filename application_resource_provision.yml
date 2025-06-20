@@ -280,10 +280,20 @@ Resources:
               awslogs-group: /ecs/cloudbasedproject
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
+  
+  
+  CloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/cloudbasedproject
+      RetentionInDays: 7
+
 
   CloudBasedService:
     Type: AWS::ECS::Service
-    DependsOn: ALBListener
+    DependsOn:
+      - ALBListener
+      - CloudWatchLogGroup
     Properties:
       Cluster: !Ref ECSCluster
       LaunchType: FARGATE
@@ -351,5 +361,5 @@ Resources:
           PredefinedMetricType: ECSServiceAverageCPUUtilization
         ScaleInCooldown: 60
         ScaleOutCooldown: 60
-
+  
 
