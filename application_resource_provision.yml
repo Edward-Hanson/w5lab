@@ -341,20 +341,6 @@ Resources:
       ComputePlatform: ECS
       ApplicationName: cloudbasedproject-codedeploy
 
-  CodeDeployRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: CodeDeployBlueGreenRole
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: codedeploy.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRoleForECS
-
   CodeDeployDeploymentGroup:
     Type: AWS::CodeDeploy::DeploymentGroup
     DependsOn:
@@ -362,7 +348,7 @@ Resources:
     Properties:
       ApplicationName: !Ref CodeDeployApplication
       DeploymentGroupName: cloudbasedproject-deployment-group
-      ServiceRoleArn: !GetAtt CodeDeployRole.Arn
+      ServiceRoleArn: arn:aws:iam::343218213563:role/codedeploy-role-w5
       DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
       AutoRollbackConfiguration:
         Enabled: true
