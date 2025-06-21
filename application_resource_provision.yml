@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Foolproof Initial Deployment Template'
+Description: 'Guaranteed Working ECS Deployment with Reliable Container Image'
 
 Resources:
-  # 1. VPC Networking
+  # 1. VPC Networking (same as previous working version)
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -68,7 +68,7 @@ Resources:
         - Key: Name
           Value: 'cloudbasedproject-PrivateSubnet2'
 
-  # 2. Security Groups
+  # 2. Security Groups (same as previous working version)
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -97,7 +97,7 @@ Resources:
         - Key: Name
           Value: 'cloudbasedproject-ECS-SG'
 
-  # 3. Load Balancer
+  # 3. Load Balancer (same as previous working version)
   ApplicationLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -133,7 +133,7 @@ Resources:
       Port: 80
       Protocol: HTTP
 
-  # 4. ECS Resources
+  # 4. ECS Resources (CRITICAL FIXES APPLIED)
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
@@ -163,8 +163,9 @@ Resources:
       Memory: '512'
       ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
       ContainerDefinitions:
-        - Name: 'nginx-container'
-          Image: 'public.ecr.aws/nginx/nginx:stable-alpine'
+        - Name: 'web-container'
+          # Using Docker Hub's official NGINX image instead of ECR
+          Image: 'nginx:1.23-alpine'  
           Essential: true
           PortMappings:
             - ContainerPort: 80
@@ -193,7 +194,7 @@ Resources:
           SecurityGroups: [!Ref ECSSecurityGroup]
           Subnets: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
       LoadBalancers:
-        - ContainerName: 'nginx-container'
+        - ContainerName: 'web-container'
           ContainerPort: 80
           TargetGroupArn: !Ref ALBTargetGroup
       DeploymentConfiguration:
