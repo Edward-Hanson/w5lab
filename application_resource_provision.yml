@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Initial deployment with dummy image'
+Description: 'Initial deployment with dummy image - FIXED VERSION'
 
 Parameters:
   EnvironmentName:
@@ -12,7 +12,7 @@ Parameters:
     Default: 2020
 
 Resources:
-  # VPC and Networking (unchanged from your original)
+  # VPC and Networking (same as before)
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -107,7 +107,7 @@ Resources:
         - Key: Name
           Value: !Sub ${EnvironmentName}-ECSSecurityGroup
 
-  # ALB
+  # ALB and Target Group (CRITICAL FIXES)
   ApplicationLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -132,13 +132,14 @@ Resources:
       TargetType: ip
       VpcId: !Ref VPC
       HealthCheckPath: /
-      HealthCheckPort: "2020"
+      HealthCheckPort: "8080"  # Changed from 2020 to work with dummy image
       HealthCheckIntervalSeconds: 30
       HealthyThresholdCount: 2
       UnhealthyThresholdCount: 2
 
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn: [ApplicationLoadBalancer, ALBTargetGroup]  # Explicit dependency
     Properties:
       DefaultActions:
         - Type: forward
@@ -159,6 +160,7 @@ Resources:
   # ECS Task Definition (Dummy Image)
   ECSTaskDefinition:
     Type: AWS::ECS::TaskDefinition
+    DependsOn: [ALBListener]  # Wait for ALB to be ready
     Properties:
       Family: !Sub ${EnvironmentName}-task
       NetworkMode: awsvpc
@@ -169,13 +171,13 @@ Resources:
       ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
       ContainerDefinitions:
         - Name: !Sub ${EnvironmentName}-container
-          Image: public.ecr.aws/amazonlinux/amazonlinux:latest
+          Image: public.ecr.aws/nginx/nginx:latest  # Changed to nginx which listens on 80
           Essential: true
           PortMappings:
-            - ContainerPort: !Ref ContainerPort
+            - ContainerPort: 80  # Nginx listens on 80
               HostPort: !Ref ContainerPort
           HealthCheck:
-            Command: ["CMD-SHELL", "exit 0"]
+            Command: ["CMD-SHELL", "curl -f http://localhost/ || exit 1"]
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -183,14 +185,15 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
 
-  # ECS Service
+  # ECS Service (CRITICAL FIXES)
   ECSService:
     Type: AWS::ECS::Service
+    DependsOn: [ALBListener, ECSTaskDefinition]  # Explicit dependencies
     Properties:
       ServiceName: !Sub ${EnvironmentName}-service
       Cluster: !Ref ECSCluster
       LaunchType: FARGATE
-      DesiredCount: 1  # Start with just 1 task for initial deployment
+      DesiredCount: 1
       TaskDefinition: !Ref ECSTaskDefinition
       NetworkConfiguration:
         AwsvpcConfiguration:
@@ -202,7 +205,7 @@ Resources:
             - !Ref PrivateSubnet2
       LoadBalancers:
         - ContainerName: !Sub ${EnvironmentName}-container
-          ContainerPort: !Ref ContainerPort
+          ContainerPort: 80  # Matches nginx port
           TargetGroupArn: !Ref ALBTargetGroup
       DeploymentConfiguration:
         MaximumPercent: 200
