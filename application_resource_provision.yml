@@ -127,12 +127,12 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       Name: !Sub ${EnvironmentName}-TG
-      Port: !Ref ContainerPort
+      Port: 80
       Protocol: HTTP
       TargetType: ip
       VpcId: !Ref VPC
       HealthCheckPath: /
-      HealthCheckPort: "8080"  # Changed from 2020 to work with dummy image
+      HealthCheckPort: "80" 
       HealthCheckIntervalSeconds: 30
       HealthyThresholdCount: 2
       UnhealthyThresholdCount: 2
@@ -160,7 +160,7 @@ Resources:
   # ECS Task Definition (Dummy Image)
   ECSTaskDefinition:
     Type: AWS::ECS::TaskDefinition
-    DependsOn: [ALBListener]  # Wait for ALB to be ready
+    DependsOn: [ALBListener]
     Properties:
       Family: !Sub ${EnvironmentName}-task
       NetworkMode: awsvpc
@@ -171,11 +171,11 @@ Resources:
       ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
       ContainerDefinitions:
         - Name: !Sub ${EnvironmentName}-container
-          Image: public.ecr.aws/nginx/nginx:latest  # Changed to nginx which listens on 80
+          Image: public.ecr.aws/nginx/nginx:latest
           Essential: true
           PortMappings:
-            - ContainerPort: 80  # Nginx listens on 80
-              HostPort: !Ref ContainerPort
+            - ContainerPort: 80 
+              HostPort: 80       
           HealthCheck:
             Command: ["CMD-SHELL", "curl -f http://localhost/ || exit 1"]
           LogConfiguration:
@@ -185,10 +185,10 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
 
-  # ECS Service (CRITICAL FIXES)
+  # ECS Service 
   ECSService:
     Type: AWS::ECS::Service
-    DependsOn: [ALBListener, ECSTaskDefinition]  # Explicit dependencies
+    DependsOn: [ALBListener, ECSTaskDefinition]  
     Properties:
       ServiceName: !Sub ${EnvironmentName}-service
       Cluster: !Ref ECSCluster
@@ -205,7 +205,7 @@ Resources:
             - !Ref PrivateSubnet2
       LoadBalancers:
         - ContainerName: !Sub ${EnvironmentName}-container
-          ContainerPort: 80  # Matches nginx port
+          ContainerPort: 80  
           TargetGroupArn: !Ref ALBTargetGroup
       DeploymentConfiguration:
         MaximumPercent: 200
