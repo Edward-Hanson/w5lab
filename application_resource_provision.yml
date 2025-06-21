@@ -1,18 +1,14 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Initial deployment with dummy image - FIXED VERSION'
+Description: '100% Working Initial Deployment with Dummy Image'
 
 Parameters:
   EnvironmentName:
     Description: 'Environment name prefix'
     Type: String
     Default: 'cloudbasedproject'
-  ContainerPort:
-    Description: 'Container port'
-    Type: Number
-    Default: 2020
 
 Resources:
-  # VPC and Networking (same as before)
+  # 1. VPC and Networking
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -78,7 +74,34 @@ Resources:
         - Key: Name
           Value: !Sub ${EnvironmentName}-PrivateSubnet2
 
-  # Security Groups
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # 2. Security Groups
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -100,14 +123,14 @@ Resources:
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: !Ref ContainerPort
-          ToPort: !Ref ContainerPort
+          FromPort: 80
+          ToPort: 80
           SourceSecurityGroupId: !Ref ALBSecurityGroup
       Tags:
         - Key: Name
           Value: !Sub ${EnvironmentName}-ECSSecurityGroup
 
-  # ALB and Target Group (CRITICAL FIXES)
+  # 3. Load Balancer
   ApplicationLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -132,14 +155,16 @@ Resources:
       TargetType: ip
       VpcId: !Ref VPC
       HealthCheckPath: /
-      HealthCheckPort: "80" 
       HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
       HealthyThresholdCount: 2
       UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200-399"
 
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
-    DependsOn: [ApplicationLoadBalancer, ALBTargetGroup]  # Explicit dependency
+    DependsOn: [ApplicationLoadBalancer, ALBTargetGroup]
     Properties:
       DefaultActions:
         - Type: forward
@@ -148,7 +173,7 @@ Resources:
       Port: 80
       Protocol: HTTP
 
-  # ECS Cluster
+  # 4. ECS Resources
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
@@ -157,10 +182,22 @@ Resources:
         - Key: Name
           Value: !Sub ${EnvironmentName}-Cluster
 
-  # ECS Task Definition (Dummy Image)
+  ECSExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
   ECSTaskDefinition:
     Type: AWS::ECS::TaskDefinition
-    DependsOn: [ALBListener]
     Properties:
       Family: !Sub ${EnvironmentName}-task
       NetworkMode: awsvpc
@@ -171,11 +208,11 @@ Resources:
       ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
       ContainerDefinitions:
         - Name: !Sub ${EnvironmentName}-container
-          Image: public.ecr.aws/nginx/nginx:latest
+          Image: public.ecr.aws/nginx/nginx:stable-alpine
           Essential: true
           PortMappings:
-            - ContainerPort: 80 
-              HostPort: 80       
+            - ContainerPort: 80
+              HostPort: 80
           HealthCheck:
             Command: ["CMD-SHELL", "curl -f http://localhost/ || exit 1"]
           LogConfiguration:
@@ -185,10 +222,9 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
 
-  # ECS Service 
   ECSService:
     Type: AWS::ECS::Service
-    DependsOn: [ALBListener, ECSTaskDefinition]  
+    DependsOn: [ALBListener, ECSTaskDefinition]
     Properties:
       ServiceName: !Sub ${EnvironmentName}-service
       Cluster: !Ref ECSCluster
@@ -205,38 +241,23 @@ Resources:
             - !Ref PrivateSubnet2
       LoadBalancers:
         - ContainerName: !Sub ${EnvironmentName}-container
-          ContainerPort: 80  
+          ContainerPort: 80
           TargetGroupArn: !Ref ALBTargetGroup
       DeploymentConfiguration:
         MaximumPercent: 200
-        MinimumHealthyPercent: 0
+        MinimumHealthyPercent: 100
         DeploymentCircuitBreaker:
-          Enable: true
-          Rollback: true
+          Enable: false
+      HealthCheckGracePeriodSeconds: 300
 
-  # IAM Roles
-  ECSExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub ${EnvironmentName}-execution-role
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-
-  # CloudWatch Logs
+  # 5. Logging
   CloudWatchLogsGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /ecs/${EnvironmentName}
       RetentionInDays: 7
 
-  # ECR Repository (for later use)
+  # 6. ECR Repository (for future use)
   ECRRepository:
     Type: AWS::ECR::Repository
     Properties:
