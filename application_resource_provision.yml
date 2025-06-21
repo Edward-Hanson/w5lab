@@ -29,10 +29,6 @@ Parameters:
 
 Resources:
 
-  #########################
-  # VPC and Subnets
-  #########################
-
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -140,10 +136,6 @@ Resources:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
-  #########################
-  # Security Groups
-  #########################
-
   AlbSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -177,10 +169,6 @@ Resources:
         ToPort: 5432
         SourceSecurityGroupId: !Ref EcsServiceSG
 
-  #########################
-  # IAM Role for ECS
-  #########################
-
   ECSExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -209,10 +197,6 @@ Resources:
             - secretsmanager:GetSecretValue
             Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${DBSecretName}-*
 
-  #########################
-  # RDS PostgreSQL
-  #########################
-
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
@@ -229,7 +213,7 @@ Resources:
       AllocatedStorage: 20
       DBInstanceClass: db.t3.micro
       Engine: postgres
-      EngineVersion: 17.5
+      EngineVersion: 15.5
       MasterUsername: !Join [ '', [ '{{resolve:secretsmanager:', !Ref DBSecretName, ':SecretString:username}}' ] ]
       MasterUserPassword: !Join [ '', [ '{{resolve:secretsmanager:', !Ref DBSecretName, ':SecretString:password}}' ] ]
       VPCSecurityGroups:
@@ -238,10 +222,6 @@ Resources:
       MultiAZ: true
       PubliclyAccessible: false
       StorageType: gp2
-
-  #########################
-  # ALB, Listener, Target Group
-  #########################
 
   ALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
@@ -257,21 +237,25 @@ Resources:
       - Key: idle_timeout.timeout_seconds
         Value: '60'
 
-  ALBTargetGroup:
+  BlueTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: cbp-tg
       Port: 2020
       Protocol: HTTP
       VpcId: !Ref VPC
       TargetType: ip
-      HealthCheckPath: /
-      HealthCheckIntervalSeconds: 30
-      HealthCheckTimeoutSeconds: 10
-      HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 5
-      Matcher:
-        HttpCode: 200
+      HealthCheckPath: /actuator/health
+      Matcher: { HttpCode: 200 }
+
+  GreenTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 2020
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: ip
+      HealthCheckPath: /actuator/health
+      Matcher: { HttpCode: 200 }
 
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -281,11 +265,7 @@ Resources:
       Protocol: HTTP
       DefaultActions:
       - Type: forward
-        TargetGroupArn: !Ref ALBTargetGroup
-
-  #########################
-  # ECS Cluster, Task, Service
-  #########################
+        TargetGroupArn: !Ref BlueTargetGroup
 
   LogGroup:
     Type: AWS::Logs::LogGroup
@@ -312,7 +292,6 @@ Resources:
         Image: public.ecr.aws/docker/library/nginx:latest
         PortMappings:
         - ContainerPort: 2020
-          Protocol: tcp
         Environment:
         - Name: SPRING_DATASOURCE_URL
           Value: !Sub jdbc:postgresql://${PostgresDB.Endpoint.Address}:${PostgresDB.Endpoint.Port}/appdb
@@ -336,7 +315,7 @@ Resources:
     DependsOn:
       - ALB
       - ALBListener
-      - ALBTargetGroup
+      - BlueTargetGroup
     Properties:
       ServiceName: cloudbasedproject-service
       Cluster: !Ref ECSCluster
@@ -354,65 +333,77 @@ Resources:
       LoadBalancers:
       - ContainerName: springboot-container
         ContainerPort: 2020
-        TargetGroupArn: !Ref ALBTargetGroup
+        TargetGroupArn: !Ref BlueTargetGroup
 
-  #########################
-  # ECR Repository
-  #########################
-
-  AppECRRepo:
-    Type: AWS::ECR::Repository
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
     Properties:
-      RepositoryName: cloudbasedproject-repo
-      ImageScanningConfiguration:
-        ScanOnPush: true
-      LifecyclePolicy:
-        LifecyclePolicyText: |
-          {
-            "rules": [
-              {
-                "rulePriority": 1,
-                "description": "Expire untagged images after 7 days",
-                "selection": {
-                  "tagStatus": "untagged",
-                  "countType": "sinceImagePushed",
-                  "countUnit": "days",
-                  "countNumber": 7
-                },
-                "action": {
-                  "type": "expire"
-                }
-              }
-            ]
-          }
+      ComputePlatform: ECS
+      ApplicationName: cloudbasedproject-codedeploy
+
+  CodeDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CodeDeployBlueGreenRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRoleForECS
+
+  CodeDeployDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    DependsOn:
+      - ALBListener
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      DeploymentGroupName: cloudbasedproject-deployment-group
+      ServiceRoleArn: !GetAtt CodeDeployRole.Arn
+      DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
+      AutoRollbackConfiguration:
+        Enabled: true
+        Events: [ DEPLOYMENT_FAILURE ]
+      DeploymentStyle:
+        DeploymentType: BLUE_GREEN
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+      BlueGreenDeploymentConfiguration:
+        TerminateBlueInstancesOnDeploymentSuccess:
+          Action: TERMINATE
+          TerminationWaitTimeInMinutes: 5
+        DeploymentReadyOption:
+          ActionOnTimeout: CONTINUE_DEPLOYMENT
+          WaitTimeInMinutes: 0
+        GreenFleetProvisioningOption:
+          Action: DISCOVER_EXISTING
+      LoadBalancerInfo:
+        TargetGroupPairInfoList:
+          - TargetGroups:
+              - Name: !Ref BlueTargetGroup
+              - Name: !Ref GreenTargetGroup
+            ProdTrafficRoute:
+              ListenerArns:
+                - !Ref ALBListener
+      ECSService:
+        ClusterName: !Ref ECSCluster
+        ServiceName: !Ref ECSService
 
 Outputs:
   ALBURL:
     Description: Application Load Balancer URL
     Value: !Sub http://${ALB.DNSName}
-    Export:
-      Name: ALBURL
 
   RDSAddress:
     Description: RDS PostgreSQL Endpoint
     Value: !GetAtt PostgresDB.Endpoint.Address
-    Export:
-      Name: RDSAddress
 
   RDSPort:
     Description: RDS PostgreSQL Port
     Value: !GetAtt PostgresDB.Endpoint.Port
-    Export:
-      Name: RDSPort
 
   ClusterName:
     Description: ECS Cluster
     Value: !Ref ECSCluster
-    Export:
-      Name: ClusterName
-
-  ECRRepositoryURI:
-    Description: ECR URI to push Docker image
-    Value: !GetAtt AppECRRepo.RepositoryUri
-    Export:
-      Name: ECRRepositoryURI
