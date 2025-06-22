@@ -1,5 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Monolithic Stack for Spring Boot ECS App with PostgreSQL and S3
+Transform: AWS::CodeDeployBlueGreen
+Description: Full Infrastructure for Spring Boot App with Blue/Green ECS Deployment, RDS, S3, and ALB
 
 Parameters:
   VpcCIDR:
@@ -29,13 +30,13 @@ Parameters:
 
 Resources:
 
+  # --- Networking ---
   VPC:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: !Ref VpcCIDR
       EnableDnsSupport: true
       EnableDnsHostnames: true
-      Tags: [ { Key: Name, Value: cloudbasedproject-vpc } ]
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -50,31 +51,42 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 0, !GetAZs '' ]
       CidrBlock: !Ref PublicSubnet1CIDR
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
       MapPublicIpOnLaunch: true
 
   PublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 1, !GetAZs '' ]
       CidrBlock: !Ref PublicSubnet2CIDR
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
       MapPublicIpOnLaunch: true
 
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 0, !GetAZs '' ]
       CidrBlock: !Ref PrivateSubnet1CIDR
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
 
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 1, !GetAZs '' ]
       CidrBlock: !Ref PrivateSubnet2CIDR
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+
+  NatEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -88,29 +100,17 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
 
-  PublicSubnet1RTAssoc:
+  PublicSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PublicSubnet1
       RouteTableId: !Ref PublicRouteTable
 
-  PublicSubnet2RTAssoc:
+  PublicSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
-
-  NatEIP:
-    Type: AWS::EC2::EIP
-    Properties:
-      Domain: vpc
-
-  NATGateway:
-    Type: AWS::EC2::NatGateway
-    DependsOn: IGWAttachment
-    Properties:
-      AllocationId: !GetAtt NatEIP.AllocationId
-      SubnetId: !Ref PublicSubnet1
 
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
@@ -124,119 +124,38 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       NatGatewayId: !Ref NATGateway
 
-  PrivateSubnet1RTAssoc:
+  PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PrivateSubnet1
       RouteTableId: !Ref PrivateRouteTable
 
-  PrivateSubnet2RTAssoc:
+  PrivateSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
-  AlbSG:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: ALB allows HTTP
-      VpcId: !Ref VPC
-      SecurityGroupIngress:
-      - IpProtocol: tcp
-        FromPort: 80
-        ToPort: 80
-        CidrIp: 0.0.0.0/0
-
-  EcsServiceSG:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: ECS tasks allow traffic from ALB
-      VpcId: !Ref VPC
-      SecurityGroupIngress:
-      - IpProtocol: tcp
-        FromPort: 2020
-        ToPort: 2020
-        SourceSecurityGroupId: !Ref AlbSG
-
-  RDSSG:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: PostgreSQL access from ECS only
-      VpcId: !Ref VPC
-      SecurityGroupIngress:
-      - IpProtocol: tcp
-        FromPort: 5432
-        ToPort: 5432
-        SourceSecurityGroupId: !Ref EcsServiceSG
-
-  ECSExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-        - Effect: Allow
-          Principal:
-            Service: ecs-tasks.amazonaws.com
-          Action: sts:AssumeRole
-      Path: "/"
-      ManagedPolicyArns:
-      - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-      Policies:
-      - PolicyName: AdditionalAccess
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-          - Effect: Allow
-            Action:
-            - s3:PutObject
-            - s3:GetObject
-            Resource: arn:aws:s3:::cloudbasedproject-bucket/*
-          - Effect: Allow
-            Action:
-            - secretsmanager:GetSecretValue
-            Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${DBSecretName}-*
-
-  DBSubnetGroup:
-    Type: AWS::RDS::DBSubnetGroup
-    Properties:
-      DBSubnetGroupDescription: Subnets for RDS
-      SubnetIds:
-      - !Ref PrivateSubnet1
-      - !Ref PrivateSubnet2
-
-  PostgresDB:
-    Type: AWS::RDS::DBInstance
-    DeletionPolicy: Snapshot
-    Properties:
-      DBInstanceIdentifier: !Ref DBInstanceIdentifier
-      AllocatedStorage: 20
-      DBInstanceClass: db.t3.micro
-      Engine: postgres
-      EngineVersion: 17.5
-      MasterUsername: !Join [ '', [ '{{resolve:secretsmanager:', !Ref DBSecretName, ':SecretString:username}}' ] ]
-      MasterUserPassword: !Join [ '', [ '{{resolve:secretsmanager:', !Ref DBSecretName, ':SecretString:password}}' ] ]
-      VPCSecurityGroups:
-      - !Ref RDSSG
-      DBSubnetGroupName: !Ref DBSubnetGroup
-      MultiAZ: true
-      PubliclyAccessible: false
-      StorageType: gp2
-      DBName: cloudbasedproject
-
+  # --- Load Balancer ---
   ALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: cloudbasedproject-alb
       Scheme: internet-facing
       Subnets:
-      - !Ref PublicSubnet1
-      - !Ref PublicSubnet2
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
       SecurityGroups:
-      - !Ref AlbSG
-      LoadBalancerAttributes:
-      - Key: idle_timeout.timeout_seconds
-        Value: '60'
+        - !Ref AlbSG
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BlueTargetGroup
 
   BlueTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -246,7 +165,8 @@ Resources:
       VpcId: !Ref VPC
       TargetType: ip
       HealthCheckPath: /
-      Matcher: { HttpCode: 200 }
+      Matcher:
+        HttpCode: 200
 
   GreenTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -256,129 +176,190 @@ Resources:
       VpcId: !Ref VPC
       TargetType: ip
       HealthCheckPath: /
-      Matcher: { HttpCode: 200 }
+      Matcher:
+        HttpCode: 200
 
-  ALBListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
+  # --- Security Groups ---
+  AlbSG:
+    Type: AWS::EC2::SecurityGroup
     Properties:
-      LoadBalancerArn: !Ref ALB
-      Port: 80
-      Protocol: HTTP
-      DefaultActions:
-      - Type: forward
-        TargetGroupArn: !Ref BlueTargetGroup
+      GroupDescription: Allow HTTP
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
 
-  LogGroup:
-    Type: AWS::Logs::LogGroup
+  EcsServiceSG:
+    Type: AWS::EC2::SecurityGroup
     Properties:
-      LogGroupName: /ecs/cloudbasedproject
-      RetentionInDays: 7
+      GroupDescription: Allow ALB to ECS
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2020
+          ToPort: 2020
+          SourceSecurityGroupId: !Ref AlbSG
 
+  RDSSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow ECS to RDS
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref EcsServiceSG
+
+  # --- IAM and Logging ---
+  ECSExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: InlinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: arn:aws:s3:::cloudbasedproject-bucket/*
+
+  # --- RDS ---
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: DB subnets
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  PostgresDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Ref DBInstanceIdentifier
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: 20
+      Engine: postgres
+      EngineVersion: 15.4
+      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref DBSecretName, ':SecretString:username}}']
+      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref DBSecretName, ':SecretString:password}}']
+      VPCSecurityGroups:
+        - !Ref RDSSG
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      MultiAZ: true
+      PubliclyAccessible: false
+      StorageType: gp2
+      DBName: cloudbasedproject
+
+  # --- ECS ---
   ECSCluster:
     Type: AWS::ECS::Cluster
-    Properties:
-      ClusterName: cloudbasedproject-cluster
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Family: cloudbasedproject-task
-      Cpu: "512"
-      Memory: "1024"
+      Cpu: 512
+      Memory: 1024
       NetworkMode: awsvpc
-      RequiresCompatibilities: [ FARGATE ]
+      RequiresCompatibilities: [FARGATE]
       ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
       ContainerDefinitions:
-      - Name: springboot-container
-        Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cloudbasedproject-repo:latest"
-        PortMappings:
-        - ContainerPort: 2020
-        Environment:
-        - Name: SPRING_DATASOURCE_URL
-          Value: !Sub jdbc:postgresql://${PostgresDB.Endpoint.Address}:${PostgresDB.Endpoint.Port}/cloudbasedproject
-        - Name: SPRING_DATASOURCE_USERNAME
-          Value: !Join [ '', [ '{{resolve:secretsmanager:', !Ref DBSecretName, ':SecretString:username}}' ] ]
-        - Name: SPRING_DATASOURCE_PASSWORD
-          Value: !Join [ '', [ '{{resolve:secretsmanager:', !Ref DBSecretName, ':SecretString:password}}' ] ]
-        - Name: AWS_REGION
-          Value: !Ref AWS::Region
-        - Name: S3_BUCKET_NAME
-          Value: !Ref S3BucketName
-        LogConfiguration:
-          LogDriver: awslogs
-          Options:
-            awslogs-group: !Ref LogGroup
-            awslogs-region: !Ref AWS::Region
-            awslogs-stream-prefix: ecs
+        - Name: springboot-container
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cloudbasedproject-repo:latest"
+          PortMappings:
+            - ContainerPort: 2020
+          Environment:
+            - Name: SPRING_DATASOURCE_URL
+              Value: !Sub "jdbc:postgresql://${PostgresDB.Endpoint.Address}:${PostgresDB.Endpoint.Port}/cloudbasedproject"
+            - Name: SPRING_DATASOURCE_USERNAME
+              Value: !Join [ '', [ '{{resolve:secretsmanager:', !Ref DBSecretName, ':SecretString:username}}' ] ]
+            - Name: SPRING_DATASOURCE_PASSWORD
+              Value: !Join [ '', [ '{{resolve:secretsmanager:', !Ref DBSecretName, ':SecretString:password}}' ] ]
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: S3_BUCKET_NAME
+              Value: !Ref S3BucketName
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/cloudbasedproject
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
 
   ECSService:
     Type: AWS::ECS::Service
-    DependsOn:
-      - ALB
-      - ALBListener
-      - BlueTargetGroup
     Properties:
       ServiceName: cloudbasedproject-service
       Cluster: !Ref ECSCluster
       LaunchType: FARGATE
-      HealthCheckGracePeriodSeconds: 60
       DesiredCount: 1
+      HealthCheckGracePeriodSeconds: 60
       NetworkConfiguration:
         AwsvpcConfiguration:
           Subnets:
-          - !Ref PrivateSubnet1
-          - !Ref PrivateSubnet2
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
           SecurityGroups:
-          - !Ref EcsServiceSG
+            - !Ref EcsServiceSG
           AssignPublicIp: DISABLED
       TaskDefinition: !Ref TaskDefinition
       LoadBalancers:
-      - ContainerName: springboot-container
-        ContainerPort: 2020
-        TargetGroupArn: !Ref BlueTargetGroup
+        - ContainerName: springboot-container
+          ContainerPort: 2020
+          TargetGroupArn: !Ref BlueTargetGroup
+      DeploymentController:
+        Type: CODE_DEPLOY
 
-  CodeDeployApplication:
+  CodeDeployApp:
     Type: AWS::CodeDeploy::Application
     Properties:
-      ComputePlatform: ECS
       ApplicationName: cloudbasedproject-codedeploy
+      ComputePlatform: ECS
 
-  CodeDeployDeploymentGroup:
+  CodeDeployDG:
     Type: AWS::CodeDeploy::DeploymentGroup
-    DependsOn:
-      - ALBListener
     Properties:
-      ApplicationName: !Ref CodeDeployApplication
+      ApplicationName: !Ref CodeDeployApp
       DeploymentGroupName: cloudbasedproject-deployment-group
       ServiceRoleArn: arn:aws:iam::343218213563:role/codedeploy-role-w5
-      DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
-      AutoRollbackConfiguration:
-        Enabled: true
-        Events: [ DEPLOYMENT_FAILURE ]
-      DeploymentStyle:
-        DeploymentType: BLUE_GREEN
-        DeploymentOption: WITH_TRAFFIC_CONTROL
-      BlueGreenDeploymentConfiguration:
-        TerminateBlueInstancesOnDeploymentSuccess:
-          Action: TERMINATE
-          TerminationWaitTimeInMinutes: 5
-        DeploymentReadyOption:
-          ActionOnTimeout: CONTINUE_DEPLOYMENT
-          WaitTimeInMinutes: 0
-        GreenFleetProvisioningOption:
-          Action: DISCOVER_EXISTING
-      LoadBalancerInfo:
-        TargetGroupPairInfoList:
-          - TargetGroups:
-              - Name: !Ref BlueTargetGroup
-              - Name: !Ref GreenTargetGroup
-            ProdTrafficRoute:
-              ListenerArns:
-                - !Ref ALBListener
-      EcsServices:
-        - ClusterName: !Ref ECSCluster
-          ServiceName: !Ref ECSService
 
+UpdatePolicy:
+  CodeDeployBlueGreen:
+    ApplicationName: !Ref CodeDeployApp
+    DeploymentGroupName: !Ref CodeDeployDG
+    TerminationWaitTimeInMinutes: 5
+    BlueGreenDeploymentConfiguration:
+      DeploymentReadyOption:
+        ActionOnTimeout: CONTINUE_DEPLOYMENT
+        WaitTimeInMinutes: 0
+      TerminateBlueInstancesOnDeploymentSuccess:
+        Action: TERMINATE
+        TerminationWaitTimeInMinutes: 5
+      GreenFleetProvisioningOption:
+        Action: DISCOVER_EXISTING
+    TrafficRoutingConfiguration:
+      Type: TimeBasedCanary
+      TimeBasedCanary:
+        interval: 5
+        percentage: 100
 
 Outputs:
   ALBURL:
