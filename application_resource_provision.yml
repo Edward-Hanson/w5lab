@@ -289,7 +289,7 @@ Resources:
       ExecutionRoleArn: !GetAtt ECSExecutionRole.Arn
       ContainerDefinitions:
       - Name: springboot-container
-        Image: public.ecr.aws/docker/library/nginx:latest
+        Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/cloudbasedproject-repo:latest"
         PortMappings:
         - ContainerPort: 2020
         Environment:
