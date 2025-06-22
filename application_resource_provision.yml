@@ -245,7 +245,7 @@ Resources:
       Protocol: HTTP
       VpcId: !Ref VPC
       TargetType: ip
-      HealthCheckPath: /actuator/health
+      HealthCheckPath: /
       Matcher: { HttpCode: 200 }
 
   GreenTargetGroup:
@@ -255,7 +255,7 @@ Resources:
       Protocol: HTTP
       VpcId: !Ref VPC
       TargetType: ip
-      HealthCheckPath: /actuator/health
+      HealthCheckPath: /
       Matcher: { HttpCode: 200 }
 
   ALBListener:
@@ -321,6 +321,7 @@ Resources:
       ServiceName: cloudbasedproject-service
       Cluster: !Ref ECSCluster
       LaunchType: FARGATE
+      HealthCheckGracePeriodSeconds: 60
       DesiredCount: 1
       NetworkConfiguration:
         AwsvpcConfiguration:
@@ -374,9 +375,10 @@ Resources:
             ProdTrafficRoute:
               ListenerArns:
                 - !Ref ALBListener
-      ECSService:
-        ClusterName: !Ref ECSCluster
-        ServiceName: !Ref ECSService
+      EcsServices:
+        - ClusterName: !Ref ECSCluster
+          ServiceName: !Ref ECSService
+
 
 Outputs:
   ALBURL:
