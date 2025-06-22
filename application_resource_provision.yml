@@ -222,6 +222,7 @@ Resources:
       MultiAZ: true
       PubliclyAccessible: false
       StorageType: gp2
+      DBName: cloudbasedproject
 
   ALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
@@ -294,7 +295,7 @@ Resources:
         - ContainerPort: 2020
         Environment:
         - Name: SPRING_DATASOURCE_URL
-          Value: !Sub jdbc:postgresql://${PostgresDB.Endpoint.Address}:${PostgresDB.Endpoint.Port}/cloudbasedproject-db
+          Value: !Sub jdbc:postgresql://${PostgresDB.Endpoint.Address}:${PostgresDB.Endpoint.Port}/cloudbasedproject
         - Name: SPRING_DATASOURCE_USERNAME
           Value: !Join [ '', [ '{{resolve:secretsmanager:', !Ref DBSecretName, ':SecretString:username}}' ] ]
         - Name: SPRING_DATASOURCE_PASSWORD
